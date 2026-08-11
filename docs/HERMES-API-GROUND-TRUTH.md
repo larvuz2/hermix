@@ -393,3 +393,72 @@ resolved via `from hermes_constants import get_hermes_home`.
 | Manifest fields | `plugin.yaml` | `hooks:` (ignored) | `provides_hooks:` (+ `provides_tools:`) |
 | Tool handlers/schema | `tools.py` | — | OK, unchanged (already conformant) |
 | register_command/tool/inject | `__init__.py` | — | OK, unchanged (already conformant) |
+
+---
+
+## Appendix: the Desktop UI plugin SDK — a DIFFERENT surface
+
+**Confidence: LOW. Unverified against source or official docs.** Everything in
+this appendix comes from a third-party walkthrough video, not from the Hermes
+checkout above. It is recorded here so nobody re-derives it from scratch, and
+so nobody mistakes it for the verified material in the rest of this file.
+Attempts to fetch `hermes-agent.nousresearch.com/docs/` were blocked (401 from
+the browser endpoint, 403 through the proxy), so it could not be confirmed.
+
+**Hermix does not use this SDK and does not depend on any of it.**
+
+### It is not the same thing as §1
+
+Two distinct plugin systems appear to exist:
+
+| | This document, §1-§9 | The Desktop UI SDK |
+|---|---|---|
+| Shape | headless: `register(ctx)` | HTML/JS panel in the desktop shell |
+| Registers | tools, commands, hooks, skills | a UI surface at a named placement |
+| Runs | daemon + cron, host-independent | inside the desktop app only |
+| Hermix uses it | yes, entirely | no |
+
+### Placements (reported, ~25)
+
+`pane` main/left/right/top/bottom · `workspace` top/bottom/left/right/center ·
+`status_bar` left/right · `title_bar` left/center/right · `popover`
+top/bottom/left/right · `composer` top/bottom/leading/actions/attachments ·
+`workspace route + sidebar`.
+
+Forms are said to follow function: **compact** (ambient state), **anchored**
+(detail without leaving the conversation), **media**, **expansive** (full
+application), **declarative** (plugin supplies structured data, the host
+decides how it renders).
+
+### The three limits that would constrain us
+
+These are the reason this appendix exists at all — each one invalidates an
+assumption someone might otherwise make while designing a Hermix UI:
+
+1. **A desktop plugin is not always running.** It lives and dies with the
+   desktop app. So it can never be the delivery mechanism — only a *window*
+   onto state the daemon and cron already maintain. This vindicates the
+   execution/delivery plane split (§ cron): a UI would be a third, purely
+   observational plane.
+2. **Plugin storage is small JSON state, not a database.** Our dossier,
+   matchmaker state and outbox stay exactly where they are; a UI would read
+   them, never own them.
+3. **A plugin cannot invent a shell region.** It may only occupy placements the
+   host already consumes, so any Hermix surface has to fit one of the names
+   above rather than a layout of our choosing.
+
+### Why it is interesting for Hermix anyway
+
+Our sharpest product tension is that **silence is indistinguishable from
+breakage**. We currently answer that with a one-time check-in a few hours after
+install (`_config.checkin_after_hours`), which costs an interruption to prove we
+are alive.
+
+A `status_bar` compact item would answer it permanently and for free — "2
+conversations, nothing worth your time yet" — with no interruption at all. And
+the `declarative` form, if it works as described, would consume exactly the
+validated `response.packet` we already build, keeping the compiler boundary in
+`render.py` intact rather than creating a second place where attribution can be
+lost.
+
+**Verify before building anything on this.**

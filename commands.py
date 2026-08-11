@@ -718,6 +718,41 @@ def _doctor_view() -> str:
     if n:
         lines.append("  `/hermix briefing` to read exactly what it says.")
 
+    # Is the proactive ping actually alive? A cron job that exists but never
+    # fires looks exactly like a healthy quiet network from the outside, so
+    # without this the failure is invisible for as long as it lasts.
+    from . import matchmaker as _mm
+    try:
+        health = _mm.delivery_health()
+    except Exception:
+        health = None
+    if health:
+        lines.append("")
+        status = health["status"]
+        if status == "ok":
+            hrs = (health["age_seconds"] or 0) / 3600.0
+            lines.append(f"Delivery: OK — last ran {hrs:.1f}h ago.")
+        elif status == "daemon-fallback":
+            lines += ["Delivery: no scheduler on this Hermes — the background "
+                      "loop carries it instead.",
+                      "  Findings still arrive, just alongside your next "
+                      "conversation rather than unprompted."]
+        elif status == "missing":
+            lines += ["Delivery: PROBLEM — the scheduled job is gone.",
+                      "  Conversations continue, but nothing will reach you "
+                      "unprompted. Restart the plugin to recreate it."]
+        elif status == "never-fired":
+            lines += ["Delivery: PROBLEM — the job is scheduled but has never "
+                      "run.",
+                      "  Nothing has reached you unprompted, and nothing will "
+                      "until it fires."]
+        elif status == "stalled":
+            hrs = (health["age_seconds"] or 0) / 3600.0
+            lines += [f"Delivery: PROBLEM — last ran {hrs:.0f}h ago, well past "
+                      f"the {health['interval_seconds'] // 3600}h schedule.",
+                      "  Findings are queued and safe; they just are not being "
+                      "handed to you."]
+
     # Who pays for the network's thinking. This is a promise in the README, so
     # it should be inspectable rather than something the user has to take on
     # faith — and if they ever opted into paying, they should be able to see it.

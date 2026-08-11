@@ -2188,9 +2188,76 @@ def run_engine_and_persist(client, card, llm, now, path=None, intents=None,
 def deliver_and_persist(now=None, path=None) -> str:
     """IO wrapper for the DELIVERY plane (what the cron worker runs)."""
     state = load_state(path)
-    text = deliver_pending(state, now or time.time)
+    t = float(now() if callable(now) else (now if now is not None else time.time()))
+    # Stamp EVERY run, including the silent ones. This is the only evidence that
+    # the delivery plane is actually firing: a cron job that exists but never
+    # runs produces exactly the same observable as a healthy quiet network —
+    # silence — which is why the failure could previously last indefinitely
+    # without anyone noticing. See delivery_health().
+    state["last_delivery_run"] = int(t)
+    text = deliver_pending(state, t)
     save_state(state, path)
     return text
+
+
+def delivery_health(state=None, now=None) -> dict:
+    """Is the delivery plane actually alive?
+
+    Three things can be true and only one is fine:
+      * cron scheduled AND firing        -> healthy
+      * cron scheduled but never firing  -> FAULT, and invisible without this
+      * cron unavailable (older Hermes)  -> degraded, daemon fallback carries it
+
+    Reported by /hermix doctor. The engine keeps working in every case — the
+    daemon owns discovery and conversation — so a fault here delays the ping,
+    it does not stop the network.
+    """
+    t = float(now() if callable(now) else (now if now is not None else time.time()))
+    state = load_state() if state is None else state
+
+    scheduled, cron_available = False, True
+    try:
+        from cron import jobs as cron_jobs
+        lister = getattr(cron_jobs, "list_jobs", None)
+        if callable(lister):
+            for j in (lister() or []):
+                name = (j.get("name") if isinstance(j, dict)
+                        else getattr(j, "name", None))
+                if name == CRON_JOB_NAME:
+                    scheduled = True
+                    break
+        else:
+            cron_available = False
+    except Exception:
+        cron_available = False
+
+    last = state.get("last_delivery_run")
+    age = (t - float(last)) if last else None
+    # Two missed cycles before we call it a fault: one late run is ordinary
+    # (a sleeping laptop, a slow host), two in a row is a stopped job.
+    interval = max(1, _config.match_every_hours()) * 3600
+    stale = bool(last) and age is not None and age > (2 * interval)
+
+    if not cron_available:
+        status = "daemon-fallback"
+    elif not scheduled:
+        status = "missing"
+    elif last is None:
+        status = "never-fired"
+    elif stale:
+        status = "stalled"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "scheduled": scheduled,
+        "cron_available": cron_available,
+        "last_run": int(last) if last else None,
+        "age_seconds": int(age) if age is not None else None,
+        "interval_seconds": interval,
+        "fault": status in ("missing", "never-fired", "stalled"),
+    }
 
 
 # --------------------------------------------------------------------------- #
