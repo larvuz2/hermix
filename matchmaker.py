@@ -2301,8 +2301,20 @@ def ensure_cron() -> bool:
             prompt=CRON_PROMPT,
             schedule=f"every {_config.match_every_hours()}h",
             name=CRON_JOB_NAME,
-            repeat=True,
-            deliver=True,
+            # repeat is a COUNT, not a flag: "None = forever, 1 = once". We
+            # passed True, and bool is a subclass of int, so True normalised to
+            # 1 — the delivery job ran exactly once and then retired itself,
+            # permanently, on every real install. Nothing looked wrong because
+            # the daemon kept discovering and judging and the outbox kept
+            # filling; the user just never heard from us again, and silence is
+            # what we told them to expect.
+            repeat=None,
+            # deliver is a DESTINATION string ("origin" | "local" |
+            # "<platform>:<chat>"), not a flag. True matched no branch and then
+            # hit `":" in deliver_value`, which raises TypeError on a bool.
+            # "origin" means the conversation the job was created from, with a
+            # home-channel fallback when there is no captured origin.
+            deliver="origin",
         )
         return True
     except Exception:

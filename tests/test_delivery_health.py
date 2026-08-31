@@ -145,3 +145,77 @@ def _health(monkeypatch, *, scheduled, state, now, cron_available=True):
     else:
         monkeypatch.setitem(sys.modules, "cron", None)
     return matchmaker.delivery_health(state, now)
+
+
+# --------------------------------------------------------------------------- #
+# The cron job's own arguments
+#
+# These are the arguments Hermes actually consumes, and getting them wrong is
+# invisible: the daemon keeps discovering and judging, the outbox keeps filling,
+# and the user simply never hears anything — which is what we told them to
+# expect. Verified against cron/jobs.py::create_job in the Hermes source:
+#
+#   repeat  : "How many times to run (None = forever, 1 = once)"
+#   deliver : "Where to deliver output ('origin', 'local', 'telegram', etc.)"
+# --------------------------------------------------------------------------- #
+class _RecordingCron:
+    def __init__(self):
+        self.created = []
+
+    def list_jobs(self, *a, **k):
+        return []
+
+    def create_job(self, **kw):
+        self.created.append(kw)
+        return {"id": "job-1"}
+
+
+def _install_cron(monkeypatch, mod):
+    import sys
+    import types
+    pkg = types.ModuleType("cron")
+    pkg.jobs = mod
+    monkeypatch.setitem(sys.modules, "cron", pkg)
+    monkeypatch.setitem(sys.modules, "cron.jobs", mod)
+
+
+def test_the_delivery_job_repeats_forever(monkeypatch):
+    """repeat is a COUNT. bool is a subclass of int, so repeat=True normalised
+    to 1 and the job retired itself after a single run on every real install."""
+    cron = _RecordingCron()
+    _install_cron(monkeypatch, cron)
+    assert matchmaker.ensure_cron() is True
+
+    kw = cron.created[0]
+    assert kw["repeat"] is None, (
+        f"repeat={kw['repeat']!r} means run that many times and stop; "
+        "None means forever")
+    assert not isinstance(kw["repeat"], bool)
+
+
+def test_the_delivery_job_names_a_real_destination(monkeypatch):
+    """deliver is a destination STRING. A bool matches no branch and then hits
+    `":" in deliver_value`, which raises TypeError on a bool."""
+    cron = _RecordingCron()
+    _install_cron(monkeypatch, cron)
+    matchmaker.ensure_cron()
+
+    deliver = cron.created[0]["deliver"]
+    assert isinstance(deliver, str), f"deliver={deliver!r} is not a destination"
+    assert deliver in ("origin", "local") or ":" in deliver
+
+
+def test_the_schedule_follows_the_configured_interval(monkeypatch):
+    monkeypatch.setenv("HERMIX_MATCH_EVERY_HOURS", "6")
+    cron = _RecordingCron()
+    _install_cron(monkeypatch, cron)
+    matchmaker.ensure_cron()
+    assert cron.created[0]["schedule"] == "every 6h"
+
+
+def test_an_existing_job_is_not_duplicated(monkeypatch):
+    cron = _RecordingCron()
+    cron.list_jobs = lambda *a, **k: [{"name": matchmaker.CRON_JOB_NAME}]
+    _install_cron(monkeypatch, cron)
+    assert matchmaker.ensure_cron() is True
+    assert cron.created == [], "a second job was created for the same name"

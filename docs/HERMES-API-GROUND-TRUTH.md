@@ -462,3 +462,69 @@ validated `response.packet` we already build, keeping the compiler boundary in
 lost.
 
 **Verify before building anything on this.**
+
+---
+
+## Re-verification: 2026-08-31 (upstream `3145986c2`)
+
+Re-checked against a fresh fetch of `NousResearch/hermes-agent`, **26,540
+commits** after the original 2026-07-24 pass. `hermes_cli/plugins.py` alone grew
+by ~5,300 lines, so the surfaces we depend on were re-read rather than assumed.
+
+### Still true — no change needed
+
+| Surface | Status |
+|---|---|
+| `ctx.register_tool / register_command / register_hook / register_skill` | present, same names |
+| `register_tool(name, toolset, schema, handler, description=…)` | our call matches exactly |
+| `pre_tool_call` / `pre_llm_call` in `VALID_HOOKS` | both still valid |
+| Hook block contract `{"action": "block", "message": …}` | still canonical (`agent/shell_hooks.py`) |
+| `ctx.llm.complete(messages=[…]).text` | unchanged |
+| `agent.secret_scope`: `get_secret`, `is_multiplex_active`, `UnscopedSecretError` | all present |
+| `cron.jobs.create_job` / `list_jobs` | present; **arguments were wrong on our side — see below** |
+| Manifest parsing | forward-compatible: unknown keys warn, never block |
+
+### FIXED: the cron job retired itself after one run
+
+`create_job` documents:
+
+    repeat  : "How many times to run (None = forever, 1 = once)"
+    deliver : "Where to deliver output ('origin', 'local', 'telegram', etc.)"
+
+We passed `repeat=True` and `deliver=True`. Both are wrong, and both had been
+wrong since the original integration — this is not upstream drift:
+
+* `bool` is a subclass of `int`, so `normalize_repeat_value(True)` returns **1**.
+  The delivery job ran **once** and then retired itself, permanently, on every
+  real install. Nothing looked broken: the daemon kept discovering, digging and
+  judging, and the outbox kept filling — the user simply never heard from us
+  again, and silence is exactly what we told them to expect.
+* `deliver` is a destination string. `True` matches no branch and then reaches
+  `if ":" in deliver_value`, which raises `TypeError` on a bool.
+
+Now `repeat=None` (forever) and `deliver="origin"` (the conversation the job came
+from, with a home-channel fallback). Pinned by
+`tests/test_delivery_health.py::test_the_delivery_job_repeats_forever` and
+`…_names_a_real_destination`.
+
+**Why our suite never caught it:** `from cron import jobs` fails in tests, so
+`ensure_cron()` returned False and the daemon fallback carried delivery. The bug
+could only appear on a real Hermes install. The new tests inject a recording
+stand-in for the cron module so the arguments are asserted directly.
+
+### New since our pass — not adopted, worth knowing
+
+* **`ctx.llm.complete_structured(instructions=…, input=[…], json_schema=…)`**
+  (`agent/plugin_llm.py`) — host-owned structured completion with optional
+  schema validation. Our judge currently asks for "STRICT JSON and nothing
+  else" and hand-parses markdown fences in `judgement._extract_json`. This
+  would remove that failure mode. It does **not** replace `judgement.parse`,
+  which validates source ids against the scenario and refuses
+  `independently_verified` — schema conformance is not groundedness.
+* **Manifest v2** (`SUPPORTED_MANIFEST_VERSION = 2`): `manifest_version`,
+  `api_version`, `requires_plugins`, `config_schema`, `license`, `homepage`,
+  `tags`. Nothing is enforced; `license` is now a recognised field rather than
+  an unknown one.
+* Many new provider registration surfaces (`register_platform`,
+  `register_memory_provider`, `register_web_search_provider`, TTS,
+  transcription, browser, …). None relevant to Hermix today.
