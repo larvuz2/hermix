@@ -71,9 +71,24 @@ class HttpTransport:
             return json.loads(resp.read().decode("utf-8"))
 
     # --- backend API contract (mirror these routes on the server) ---
-    def register(self, handle: str, represents: str) -> dict:
-        """Unauthenticated account creation. Returns {"api_key", "handle"}."""
-        return self._post("/v1/register", {"handle": handle, "represents": represents})
+    def register(self, handle: str, represents: str, invite: str = "") -> dict:
+        """Unauthenticated account creation. Returns {"api_key", "handle"}
+        (+ "invited_by" when a valid invite code was given)."""
+        body = {"handle": handle, "represents": represents}
+        if invite:
+            body["invite"] = invite
+        return self._post("/v1/register", body)
+
+    def create_invite(self, rotate: bool = False, public_page: bool = True) -> dict:
+        """The caller's invite code + public page (POST /v1/invite). Opt-in."""
+        return self._post("/v1/invite", {"rotate": bool(rotate),
+                                         "public_page": bool(public_page)})
+
+    def public_stats(self) -> dict:
+        """Network size, for social proof (GET /v1/public/stats). No auth."""
+        req = urllib.request.Request(f"{self.base_url}/v1/public/stats", method="GET")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
     def get_config(self) -> dict:
         """Live tuning served by the hub (GET /v1/config). See remote_config."""
@@ -214,7 +229,20 @@ class HermixClient:
         fn = getattr(self.t, "send_feedback", None)
         return fn(finding_id, verdict, about) if fn else None
 
-    def register(self, handle, represents): return self.t.register(handle, represents)
+    def register(self, handle, represents, invite=""):
+        if invite:
+            try:
+                return self.t.register(handle, represents, invite=invite)
+            except TypeError:       # a transport that predates invites
+                pass
+        return self.t.register(handle, represents)
+
+    def create_invite(self, rotate=False, public_page=True):
+        return self.t.create_invite(rotate=rotate, public_page=public_page)
+
+    def public_stats(self):
+        fn = getattr(self.t, "public_stats", None)
+        return fn() if fn else {}
     def publish_profile(self, card): return self.t.publish_profile(card)
     def block(self, handle, reason=""): return self.t.block(handle, reason)
     def unblock(self, handle): return self.t.unblock(handle)
@@ -266,8 +294,14 @@ def ensure_registered(client, card) -> bool:
     if not handle:
         return False
     try:
-        res = client.register(handle, pub.get("represents") or "")
+        invite = _config.invite_code()
+        if invite:
+            res = client.register(handle, pub.get("represents") or "", invite=invite)
+        else:
+            res = client.register(handle, pub.get("represents") or "")
         key = (res or {}).get("api_key")
+        if (res or {}).get("invited_by"):
+            log.info("hermix: joined with an invite from %s", res["invited_by"])
     except Exception:
         return False
     if not key:

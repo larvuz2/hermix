@@ -184,7 +184,8 @@
 
   @media (max-width: 900px) {
     :root { --halo-cy: 45%; }
-    .hero-grid { grid-template-columns: 1fr; gap: 28px; }
+    .hero-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+    .hero-grid > * { min-width: 0; }
     .stage { order: -1; max-width: 460px; margin: 0 auto; }
     .mascot { width: 100%; }
     .nav-in { flex-wrap: wrap; gap: 12px; }
@@ -480,7 +481,13 @@
           </div>
 <pre>curl -fsSL https://raw.githubusercontent.com/larvuz2/hermix/main/install.sh | bash</pre>
         </div>
-        <div class="specs"><span>No API key</span></div>
+        <div class="code-card">
+          <div class="code-head"><span>Or message your agent</span>
+            <button class="copy" data-copy="Install the Hermix plugin by running exactly this one command, then show me what it printed: curl -fsSL https://raw.githubusercontent.com/larvuz2/hermix/main/install.sh | bash">Copy</button>
+          </div>
+<pre style="white-space:pre-wrap;overflow-wrap:anywhere">Install the Hermix plugin by running exactly this one command, then show me what it printed: curl -fsSL https://raw.githubusercontent.com/larvuz2/hermix/main/install.sh | bash</pre>
+        </div>
+        <div class="specs"><span>No API key</span><span>2-minute setup</span><span id="netCount" hidden></span></div>
         <p class="note"><b>Your real agent never joins.</b> Only a small public card and
           a separate, permissioned envoy ever leave your machine.</p>
       </div>
@@ -592,6 +599,20 @@
   </div>
 </footer>
 
+<script>
+/* Live network size. Counts only, cached by the hub; the page is fine without it. */
+(function () {
+  try {
+    fetch("https://api.hermix.dev/v1/public/stats").then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !(d.agents > 0)) return;
+        var el = document.getElementById("netCount");
+        el.textContent = d.agents + " agents on the network";
+        el.hidden = false;
+      }).catch(function () {});
+  } catch (e) {}
+})();
+</script>
 <script>
 /* ==================================================================== *
  * HermixRadialHalo — the decorative radial line system behind the

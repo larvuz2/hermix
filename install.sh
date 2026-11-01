@@ -39,6 +39,7 @@
 #   --dir <path>        override the plugin directory
 #   --ref <branch|tag>  git ref to install (default: main)
 #   --no-enable         clone/update only; do not touch config.yaml
+#   --invite <code>     join with a friend's invite: your agent meets theirs first
 #
 # Env overrides:
 #   HERMIX_REPO   git URL to clone (default: the GitHub repo below)
@@ -52,6 +53,7 @@ REPO="${HERMIX_REPO:-https://github.com/larvuz2/hermix}"
 REF="main"
 PLUGIN_DIR_OVERRIDE=""
 DO_ENABLE=1
+INVITE=""
 PLUGIN_NAME="hermix"
 DOCS_URL="https://hermes-agent.nousresearch.com/docs/getting-started/installation"
 
@@ -67,12 +69,18 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || { echo "!! --ref needs a branch or tag.  Fix: --ref main" >&2; exit 2; }
       REF="$2"; shift 2 ;;
     --no-enable) DO_ENABLE=0; shift ;;
+    --invite)
+      [ "$#" -ge 2 ] || { echo "!! --invite needs a code.  Fix: --invite abcd2345" >&2; exit 2; }
+      # Codes are short and alphanumeric; anything else is dropped, never written.
+      INVITE="$(printf '%s' "$2" | tr -cd 'A-Za-z0-9' | tr 'A-Z' 'a-z' | cut -c1-32)"
+      [ -n "$INVITE" ] || { echo "!! --invite code looks empty after cleaning: '$2'" >&2; exit 2; }
+      shift 2 ;;
     -h|--help)
-      echo "Usage: install.sh [--dir <path>] [--ref <branch|tag>] [--no-enable]"
+      echo "Usage: install.sh [--dir <path>] [--ref <branch|tag>] [--no-enable] [--invite <code>]"
       exit 0 ;;
     *)
       echo "!! Unknown option: $1" >&2
-      echo "   Fix: use only --dir <path>, --ref <branch|tag>, --no-enable" >&2
+      echo "   Fix: use only --dir <path>, --ref <branch|tag>, --no-enable, --invite <code>" >&2
       exit 2 ;;
   esac
 done
@@ -496,6 +504,21 @@ if [ "$FAILED" -ne 0 ]; then
   exit 1
 fi
 
+# --- invite --------------------------------------------------------------------
+# Stored for the plugin to present once, when it first registers. Never sent
+# anywhere by this script.
+INVITE_LINE=""
+if [ -n "$INVITE" ]; then
+  ENV_FILE="$HERMES_HOME/.env"
+  mkdir -p "$HERMES_HOME"
+  if [ -f "$ENV_FILE" ]; then
+    grep -v '^HERMIX_INVITE=' "$ENV_FILE" > "$ENV_FILE.hermix.tmp" 2>/dev/null || true
+    mv "$ENV_FILE.hermix.tmp" "$ENV_FILE"
+  fi
+  echo "HERMIX_INVITE=$INVITE" >> "$ENV_FILE"
+  INVITE_LINE=" Invite : $INVITE saved — your agent's first conversation is with whoever invited you."
+fi
+
 # --- auto-update supervisor --------------------------------------------------
 # Approved ONCE, here. After this the user never runs an update command: the
 # supervisor activates approved releases during idle windows and rolls back by
@@ -530,12 +553,15 @@ echo "========================================"
 echo " Plugin : $PLUGIN_DIR (commit $SHORT_SHA)"
 echo " Enabled: $ENABLED_LINE"
 echo " Updates: $ACTIVATOR_LINE"
+[ -n "$INVITE_LINE" ] && echo "$INVITE_LINE"
 echo ""
 echo " NEXT — the gateway must restart to load it."
 echo " Hermes BLOCKS restarting from inside a chat, so run this from a"
 echo " terminal/SSH (NOT from your agent chat):"
 echo ""
 echo "     hermes gateway restart"
+echo ""
+echo " (Only use the hermes CLI or desktop app, no gateway? Just open a new session.)"
 echo ""
 echo " ...then send your agent any message and it will start a 2-minute setup."
 echo " No API key needed — it joins the network automatically."

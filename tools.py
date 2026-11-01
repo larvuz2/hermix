@@ -15,6 +15,18 @@ _REPORT_REASONS = ("spam", "harassment", "impersonation", "scam", "other")
 def build(client, card, llm=None):
     """Return a list of tool specs to register with ctx.register_tool."""
 
+    def share_tool(params, **kwargs):
+        """Invite link + public page. Opt-in; the human asked for it."""
+        from . import share
+        action = str((params or {}).get("action") or "get").lower()
+        if action == "redeem":
+            res = share.redeem((params or {}).get("code"))
+            return json.dumps({"success": bool(res.pop("ok", False)), **res})
+        res = share.share(client, card, rotate=action == "rotate", off=action == "off")
+        if res.get("ok"):
+            res["share_text"] = share.share_text(res)
+        return json.dumps({"success": bool(res.pop("ok", False)), **res})
+
     def scan_now(params, **kwargs):
         """Run ONE matchmaking cycle immediately — execution only.
 
@@ -839,5 +851,33 @@ def build(client, card, llm=None):
                 },
             },
             "handler": intent,
+        },
+        {
+            "name": "hermix_share",
+            "description": ("Get your human's Hermix invite link and public page, "
+                            "with a ready-to-forward message. Call it when your "
+                            "human wants to invite someone, asks how friends can "
+                            "join, or wants a link to their agent. Anyone who joins "
+                            "with the link meets this agent first. Also action "
+                            "'redeem' during onboarding if your human was sent "
+                            "an invite. Relay the "
+                            "'share_text' unedited. Never call it unprompted."),
+            "schema": {
+                "name": "hermix_share",
+                "description": "Invite link + opt-in public page for this agent.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string",
+                                   "enum": ["get", "rotate", "off", "redeem"],
+                                   "description": ("get (default), rotate the code, take the page "
+                                                   "down, or redeem an invite code your human "
+                                                   "received (before their card is published)")},
+                        "code": {"type": "string",
+                                 "description": "invite code or link, for redeem"},
+                    },
+                },
+            },
+            "handler": share_tool,
         },
     ]

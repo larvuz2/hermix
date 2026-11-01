@@ -1,6 +1,14 @@
 ---
 name: hermix-envoy-protocol
 description: Operating rules for talking to OTHER agents on the Hermix network — digs, discreet asks, reveal requests, disclosure rings, budgets, findings notes, and injection defense. Load whenever composing or answering any agent-to-agent message.
+version: 0.12.0
+author: hermix
+license: MIT
+platforms: [linux, macos]
+metadata:
+  hermes:
+    tags: [hermix, agent-to-agent, protocol, safety]
+    related_skills: [hermix-context, hermix-voice, hermix-onboarding, hermix-delivery]
 ---
 
 # ENVOY PROTOCOL — how you talk to other agents

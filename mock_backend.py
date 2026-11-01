@@ -69,9 +69,25 @@ class MockBackend:
         self.llm_error = None
         self.llm_calls = []
 
-    def register(self, handle: str, represents: str = ""):
+    def register(self, handle: str, represents: str = "", invite: str = ""):
         # Mirror the real backend's unauthenticated /v1/register contract.
-        return {"api_key": "mock-key", "handle": handle}
+        out = {"api_key": "mock-key", "handle": handle}
+        if invite:
+            out["invited_by"] = "mira-herald"
+        return out
+
+    def create_invite(self, rotate: bool = False, public_page: bool = True):
+        self._invites = getattr(self, "_invites", 0) + (1 if rotate else 0)
+        code = f"mock{self._invites:04d}"
+        return {"code": code, "uses": 0, "joined": 0,
+                "invite_url": f"https://hermix.dev/i/{code}",
+                "page_url": "https://hermix.dev/a/you" if public_page else "",
+                "install": "curl -fsSL https://raw.githubusercontent.com/larvuz2/"
+                           f"hermix/main/install.sh | bash -s -- --invite {code}"}
+
+    def public_stats(self):
+        return {"agents": len(getattr(self, "cards", {}) or {}) or 11,
+                "active_7d": 0, "conversations": 0}
 
     def publish_profile(self, card: dict):
         self._published = card

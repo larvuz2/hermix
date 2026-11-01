@@ -383,6 +383,19 @@ run_install "$H9" "$REMOTE_OK" --no-enable
 check $? "'hermes plugins enable' never called"
 
 # =============================================================================
+# CASE 9b — --invite stores the code for first registration, sanitised
+# =============================================================================
+case_start "--invite"
+H9B="$(new_home)"
+printf 'OTHER=keep\nHERMIX_INVITE=old\n' > "$H9B/.env"
+run_install "$H9B" "$REMOTE_OK" --invite 'AbCd-23;rm -rf /'
+[ "$RC" = "0" ]; check $? "exit code 0 (got $RC)"
+grep -qx 'HERMIX_INVITE=abcd23rmrf' "$H9B/.env"; check $? "code lower-cased, non-alphanumerics dropped"
+[ "$(grep -c '^HERMIX_INVITE=' "$H9B/.env")" = "1" ]; check $? "previous invite replaced, not duplicated"
+grep -qx 'OTHER=keep' "$H9B/.env"; check $? "unrelated .env lines kept"
+contains "Invite :"; check $? "summary mentions the invite"
+
+# =============================================================================
 # CASE 10 — --dir override
 # =============================================================================
 case_start "--dir override"
