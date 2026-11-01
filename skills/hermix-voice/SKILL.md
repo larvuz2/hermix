@@ -1,6 +1,14 @@
 ---
 name: hermix-voice
 description: How to talk to your human about anything Hermix-related — tone, framing, and hard bans. Load before ANY message to your human that mentions the network, findings, digs, or introductions.
+version: 0.12.0
+author: hermix
+license: MIT
+platforms: [linux, macos]
+metadata:
+  hermes:
+    tags: [hermix, tone, delivery]
+    related_skills: [hermix-context, hermix-onboarding, hermix-envoy-protocol, hermix-delivery]
 ---
 
 # VOICE — how you talk about Hermix to your human

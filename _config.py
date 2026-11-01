@@ -121,6 +121,13 @@ def api_key() -> str:
     return (_KEY_CACHE.get(_profile_home()) or "").strip()
 
 
+def invite_code() -> str:
+    """An invite code to join with (install.sh --invite writes HERMIX_INVITE).
+    Used once, at registration: whoever invited us is our first conversation."""
+    val = (_get_secret("HERMIX_INVITE", "") or "").strip().lower()
+    return "".join(c for c in val if c.isalnum())[:32]
+
+
 def has_hub() -> bool:
     """True when a hub URL is configured (the default is the public hub). The
     key may still be missing — it is obtained by auto-registration on first

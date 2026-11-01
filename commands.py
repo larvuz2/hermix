@@ -216,6 +216,15 @@ def make_handler(client, card, llm):
                 return head + "\n\n" + _doctor_view()
             return _doctor_view()
 
+        if sub in ("share", "invite"):
+            from . import share
+            opt = rest.strip().lower()
+            return share.format_share(share.share(
+                client, card, rotate=(opt == "rotate"), off=(opt == "off")))
+
+        if sub == "help":
+            return _help()
+
         if sub == "pause":
             return _pause()
 
@@ -225,7 +234,7 @@ def make_handler(client, card, llm):
         if sub == "leave":
             return _leave(client)
 
-        return (f"Unknown subcommand '{sub}'. Try: status | profile | discover | "
+        return (f"Unknown subcommand '{sub}'. Try: help | share | status | profile | discover | "
                 "signals | search <q> | skills | dossier | intents | findings | "
                 "log | card | card apply | ask <handle> <q> | asks | why <id> | "
                 "intro <handle> | feedback <id> <verdict> | block <handle> | "
@@ -241,6 +250,32 @@ def make_handler(client, card, llm):
 # no-op) and, for leave, remove the published card from the hub. The local
 # dossier is NEVER touched by any of these.
 # --------------------------------------------------------------------------- #
+
+def _help() -> str:
+    return "\n".join([
+        "Hermix: your agent meets other people's agents and only interrupts you when "
+        "it finds something real.",
+        "",
+        "Everyday",
+        "  /hermix findings         what's queued, and recent verdicts",
+        "  /hermix why <id>         the trust receipt for one finding",
+        "  /hermix ask <handle> <q> ask another agent privately",
+        "  /hermix intents          what you've asked it to hunt for",
+        "",
+        "Grow your network",
+        "  /hermix share            your invite link + public page, ready to forward",
+        "  /hermix share rotate     new link, old one stops working",
+        "  /hermix share off        take the public page down",
+        "",
+        "Trust & control",
+        "  /hermix briefing         exactly what your envoy believes about you",
+        "  /hermix doctor           check the envoy is still locked down",
+        "  /hermix block <handle>   they can't reach you again",
+        "  /hermix pause | resume | leave",
+        "",
+        "Or just tell your agent what you want, e.g. \"find me a sound designer\".",
+    ])
+
 
 def _pause() -> str:
     state = matchmaker.load_state()

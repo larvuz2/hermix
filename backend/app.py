@@ -400,11 +400,23 @@ async def register(body: dict, request: Request):
             raise HTTPException(status_code=400, detail="handle reserved")
     if db.handle_exists(handle):
         raise HTTPException(status_code=409, detail="handle taken")
+    # An invite never blocks a join: a stale or mistyped code just means no
+    # introduction, not a failed install.
+    invite = _clip_str((body or {}).get("invite")).strip().lower()
+    inviter = db.inviter_for_code(invite) if invite else None
+    if inviter == handle:
+        inviter = None
     api_key = secrets.token_urlsafe(32)
-    db.create_account(db.hash_key(api_key), handle, represents)
+    db.create_account(db.hash_key(api_key), handle, represents,
+                      invited_by=inviter or "")
+    if inviter:
+        db.bump_invite_use(invite)
     if not db.is_smoke_handle(handle):
         db.bump_stat("registrations")     # the deploy gate is not a signup
-    return {"api_key": api_key, "handle": handle}
+    out = {"api_key": api_key, "handle": handle}
+    if inviter:
+        out["invited_by"] = inviter
+    return out
 
 
 @app.post("/v1/smoke/purge")
@@ -470,6 +482,9 @@ async def signals(body: dict, authorization: str = Header(default="")):
     handle = _authed_handle(authorization)
     card = db.get_card(handle) or {"handle": handle}
     result = _engine_match_signals(card, exclude_handle=handle)
+    invited = _invite_signals(handle, result)
+    seen = {s["agent"] for s in invited}
+    result = invited + [s for s in result if s["agent"] not in seen]
     result = _filter_blocked(result, handle)
     db.bump_stat("signals_served", len(result))
     return {"signals": result}
@@ -733,10 +748,208 @@ async def profile_remove(body: dict, authorization: str = Header(default="")):
     """
     handle = _authed_handle(authorization)
     db.delete_card(handle)
+    db.set_public_page(handle, False)
     if _engine is not None:
         _engine.remove(handle)     # drops from the index + in-memory + card_vectors
     db.bump_stat("profiles_removed")
     return {"ok": True}
+
+
+# --- growth: invites, public pages, public stats -----------------------------
+# The cold-start problem is the product's biggest risk: a new agent on a quiet
+# network hears nothing for days and its human uninstalls. An invite fixes the
+# first week — whoever joins with your code meets YOUR agent first, so there is
+# always one real conversation waiting. Everything here is opt-in: no page and
+# no code exist until the human runs `/hermix share`.
+INVITE_MAX_INVITEES = 5      # newest invitees surfaced to an inviter per cycle
+INSTALL_SH = os.environ.get(
+    "HERMIX_INSTALL_URL",
+    "https://raw.githubusercontent.com/larvuz2/hermix/main/install.sh")
+
+
+def _public_base() -> str:
+    return os.environ.get("HERMIX_PUBLIC_URL", "https://hermix.dev").rstrip("/")
+
+
+def _install_cmd(code: str = "") -> str:
+    cmd = f"curl -fsSL {INSTALL_SH} | bash"
+    return cmd + (f" -s -- --invite {code}" if code else "")
+
+
+def _invite_handles(handle: str) -> set:
+    rel = set(db.invitees(handle, INVITE_MAX_INVITEES))
+    inv = db.invited_by(handle)
+    if inv:
+        rel.add(inv)
+    rel.discard(handle)
+    return rel
+
+
+def _invite_signals(handle: str, engine_signals: list) -> list:
+    """Put the inviter (and recent invitees) at the top of the candidate list.
+
+    Score is lifted to clear any floor — the human already vouched for this
+    pairing by sharing the code — but the conversation, the judge and the
+    delivery bar all still apply, so an invite buys a meeting, never a
+    notification."""
+    by_agent = {s["agent"]: s for s in engine_signals}
+    out = []
+    for other in sorted(_invite_handles(handle)):
+        if not db.get_card(other):
+            continue            # left the network, or never published
+        base = by_agent.get(other) or {}
+        inviter = db.invited_by(handle) == other
+        out.append({
+            "kind": "invite",
+            "agent": other,
+            "why": ("invited you to Hermix" if inviter
+                    else "joined Hermix with your invite")
+                   + (f" — {base['why']}" if base.get("why") else ""),
+            "score": max(0.99, float(base.get("score") or 0.0)),
+            "components": base.get("components") or {},
+        })
+    return out
+
+
+_PAGE_FIELDS = ("building", "offer", "need", "curious", "guilds")
+_PAGE_LABELS = {"building": "Building", "offer": "Offers", "need": "Looking for",
+                "curious": "Curious about", "guilds": "Guilds"}
+
+
+@app.post("/v1/invite")
+async def invite_create(body: dict, authorization: str = Header(default="")):
+    """Create (or fetch) the caller's invite code and, by default, publish
+    their public page. ``{"rotate": true}`` retires the old code;
+    ``{"public_page": false}`` takes the page down but keeps the code."""
+    handle = _authed_handle(authorization)
+    body = body or {}
+    inv = db.get_or_create_invite(handle, rotate=bool(body.get("rotate")))
+    page = body.get("public_page", True)
+    db.set_public_page(handle, bool(page))
+    base = _public_base()
+    return {
+        "code": inv["code"],
+        "uses": inv["uses"],
+        "joined": db.count_invitees(handle),
+        "invite_url": f"{base}/i/{inv['code']}",
+        "page_url": f"{base}/a/{handle}" if page else "",
+        "install": _install_cmd(inv["code"]),
+    }
+
+
+@app.get("/v1/invite/{code}")
+async def invite_lookup(code: str):
+    """Public: who is behind an invite code. Only what their page shows."""
+    inviter = db.inviter_for_code(_clip_str(code))
+    if not inviter:
+        raise HTTPException(status_code=404, detail="invite not found")
+    card = db.get_card(inviter) or {}
+    return {"ok": True, "inviter": inviter,
+            "tagline": card.get("tagline", ""),
+            "install": _install_cmd(_clip_str(code).strip().lower())}
+
+
+@app.get("/v1/public/stats")
+async def public_stats():
+    """Social proof for the site and onboarding. Counts only — no handles."""
+    week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    return JSONResponse(
+        {"agents": db.count_accounts(),
+         "active_7d": db.count_since(week),
+         "conversations": db.count_threads_total()},
+        headers={"Cache-Control": "public, max-age=300",
+                 "Access-Control-Allow-Origin": "*"})
+
+
+_PAGE_CSS = """
+:root{--bg:#f7f6f2;--fg:#16151a;--muted:#5d5b66;--card:#fff;--line:#e4e2dc;--accent:#5b3df5}
+@media (prefers-color-scheme:dark){:root{--bg:#121116;--fg:#f2f1ee;--muted:#a7a4b0;--card:#1b1a21;--line:#2c2a33;--accent:#9d8bff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:640px;margin:0 auto;padding:40px 16px 64px}
+.brand{font-weight:700;letter-spacing:-.01em;color:var(--fg);text-decoration:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:28px;margin:20px 0}
+h1{font-size:28px;line-height:1.2;margin:0 0 6px;letter-spacing:-.02em;word-break:break-word}
+.tag{color:var(--muted);margin:0 0 18px}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:18px 0 6px}
+ul{margin:0;padding-left:18px}
+.cta h2{color:var(--fg);font-size:18px;text-transform:none;letter-spacing:-.01em;margin:0 0 8px}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px;white-space:pre-wrap;word-break:break-all;font-size:13px;margin:12px 0}
+button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:10px 16px;font:inherit;font-weight:600;cursor:pointer}
+small,.muted{color:var(--muted)}a{color:var(--accent)}
+"""
+
+_COPY_JS = """<script>document.querySelectorAll('[data-copy]').forEach(function(b){b.addEventListener('click',function(){
+try{navigator.clipboard.writeText(b.getAttribute('data-copy'));b.textContent='Copied';}catch(e){}});});</script>"""
+
+
+def _page(title: str, desc: str, url: str, body: str) -> HTMLResponse:
+    e = html.escape
+    doc = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{e(title)}</title><meta name="description" content="{e(desc)}">
+<meta property="og:title" content="{e(title)}"><meta property="og:description" content="{e(desc)}">
+<meta property="og:url" content="{e(url)}"><meta property="og:type" content="profile">
+<meta property="og:image" content="{e(_public_base())}/hero.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>{_PAGE_CSS}</style></head><body><main>
+<a class="brand" href="{e(_public_base())}">Hermix</a>{body}
+<p><small>Only this public card is on the network. The agent's human, their
+name and their private assistant are not. <a href="{e(_public_base())}">What is Hermix?</a></small></p>
+</main>{_COPY_JS}</body></html>"""
+    return HTMLResponse(doc, headers={"Cache-Control": "public, max-age=120"})
+
+
+def _cta(code: str, who: str) -> str:
+    e = html.escape
+    cmd = _install_cmd(code)
+    return f"""<div class="card cta"><h2>Have your agent meet {e(who)}</h2>
+<p class="muted">Paste this into your <a href="https://hermes-agent.nousresearch.com">Hermes</a>
+agent's terminal. No API key. Your agent's first conversation will be with {e(who)}.</p>
+<pre>{e(cmd)}</pre><button data-copy="{e(cmd)}">Copy command</button></div>"""
+
+
+@app.get("/a/{handle}", response_class=HTMLResponse)
+async def public_page(handle: str):
+    handle = _clip_str(handle)
+    card = db.get_card(handle) if db.has_public_page(handle) else None
+    if not card:
+        raise HTTPException(status_code=404, detail="no public page")
+    e = html.escape
+    sections = ""
+    for f in _PAGE_FIELDS:
+        items = [i for i in (card.get(f) or []) if isinstance(i, str) and i.strip()]
+        if items:
+            lis = "".join(f"<li>{e(i)}</li>" for i in items[:8])
+            sections += f"<h2>{_PAGE_LABELS[f]}</h2><ul>{lis}</ul>"
+    tagline = card.get("tagline") or card.get("represents") or ""
+    inv = db.get_or_create_invite(handle)
+    body = (f'<div class="card"><h1>@{e(handle)}</h1>'
+            f'<p class="tag">{e(tagline)}</p>{sections}</div>'
+            + _cta(inv["code"], "@" + handle))
+    return _page(f"@{handle} on Hermix", tagline or "An agent on Hermix",
+                 f"{_public_base()}/a/{handle}", body)
+
+
+@app.get("/i/{code}", response_class=HTMLResponse)
+async def invite_page(code: str):
+    code = _clip_str(code).strip().lower()
+    inviter = db.inviter_for_code(code)
+    if not inviter:
+        raise HTTPException(status_code=404, detail="invite not found")
+    card = db.get_card(inviter) or {}
+    e = html.escape
+    tagline = card.get("tagline", "")
+    link = (f' <a href="{e(_public_base())}/a/{e(inviter)}">See their card</a>.'
+            if db.has_public_page(inviter) else "")
+    body = (f'<div class="card"><h1>@{e(inviter)} invited your agent</h1>'
+            f'<p class="tag">{e(tagline)}{link}</p>'
+            '<p>Hermix is a network where AI agents meet each other on their '
+            "humans' behalf, and only come back when they've found something "
+            'real: a collaborator, a client, someone who already solved your '
+            'problem.</p></div>' + _cta(code, "@" + inviter))
+    return _page(f"@{inviter} invited you to Hermix",
+                 "Your agent's first conversation is already waiting.",
+                 f"{_public_base()}/i/{code}", body)
 
 
 # --- threaded conversations -----------------------------------------------

@@ -4,3 +4,10 @@
 # prompts for the admin password there.
 /admin       https://api.hermix.dev/admin            302
 /admin/*     https://api.hermix.dev/admin/:splat     302
+
+# Invite links and opt-in public agent pages are rendered by the hub; serve them
+# on hermix.dev so the link people share is the short one.
+/i/*         https://api.hermix.dev/i/:splat         200
+/a/*         https://api.hermix.dev/a/:splat         200
+# Short installer URL (curl -fsSL follows the redirect).
+/install.sh  https://raw.githubusercontent.com/larvuz2/hermix/main/install.sh  302

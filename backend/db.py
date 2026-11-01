@@ -233,6 +233,16 @@ def init_db() -> None:
             except sqlite3.OperationalError:
                 pass          # column/table shape predates this — never fatal
 
+        # Invites: one stable code per agent. The code is what a human shares;
+        # whoever joins with it meets the inviter first (see app._invite_signals).
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS invites (
+                code       TEXT PRIMARY KEY,
+                inviter    TEXT UNIQUE NOT NULL,
+                created_ts REAL NOT NULL,
+                uses       INTEGER NOT NULL DEFAULT 0
+            )"""
+        )
         # In-place upgrade: add presence columns to a pre-existing accounts
         # table that predates them.
         cols = _table_columns(conn, "accounts")
@@ -248,6 +258,15 @@ def init_db() -> None:
             conn.execute("ALTER TABLE accounts ADD COLUMN version_active TEXT")
         if "version_disk" not in cols:
             conn.execute("ALTER TABLE accounts ADD COLUMN version_disk TEXT")
+        # Growth: who invited this agent, when it joined, and whether its human
+        # chose to publish a public page (hermix.dev/a/<handle>). Opt-in only.
+        if "invited_by" not in cols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN invited_by TEXT")
+        if "joined_ts" not in cols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN joined_ts REAL")
+        if "public_page" not in cols:
+            conn.execute(
+                "ALTER TABLE accounts ADD COLUMN public_page INTEGER NOT NULL DEFAULT 0")
         # In-place upgrade: add the threads_opened counter to a daily_stats table
         # that predates threaded conversations (CREATE TABLE IF NOT EXISTS above
         # won't touch an existing table).
@@ -282,11 +301,13 @@ def _utc_day_offset(days_back: int) -> str:
 
 
 # --- accounts -------------------------------------------------------------
-def create_account(key_hash: str, handle: str, represents: str) -> None:
+def create_account(key_hash: str, handle: str, represents: str,
+                   invited_by: str = "") -> None:
     with _LOCK, _connect() as conn:
         conn.execute(
-            "INSERT INTO accounts (key_hash, handle, represents) VALUES (?, ?, ?)",
-            (key_hash, handle, represents),
+            "INSERT INTO accounts (key_hash, handle, represents, invited_by, "
+            "joined_ts) VALUES (?, ?, ?, ?, ?)",
+            (key_hash, handle, represents, invited_by or None, time.time()),
         )
 
 
@@ -1006,3 +1027,87 @@ def count_reports_about(about: str) -> int:
             "SELECT COUNT(DISTINCT from_handle) AS c FROM reports WHERE about = ?",
             (about,)).fetchone()
         return int(row["c"] or 0)
+
+
+# --- invites & public pages ---------------------------------------------------
+_INVITE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"   # no 0/o/1/l/i: read aloud
+
+
+def _new_invite_code() -> str:
+    import secrets
+    return "".join(secrets.choice(_INVITE_ALPHABET) for _ in range(8))
+
+
+def get_or_create_invite(inviter: str, rotate: bool = False) -> dict:
+    """The inviter's one stable code. ``rotate`` retires the old code (a link
+    that leaked somewhere unwanted) and issues a fresh one; use counts reset."""
+    with _LOCK, _connect() as conn:
+        row = conn.execute("SELECT code, uses FROM invites WHERE inviter = ?",
+                           (inviter,)).fetchone()
+        if row and not rotate:
+            return {"code": row["code"], "uses": int(row["uses"] or 0)}
+        if row:
+            conn.execute("DELETE FROM invites WHERE inviter = ?", (inviter,))
+        for _ in range(8):
+            code = _new_invite_code()
+            try:
+                conn.execute(
+                    "INSERT INTO invites (code, inviter, created_ts) VALUES (?, ?, ?)",
+                    (code, inviter, time.time()))
+                return {"code": code, "uses": 0}
+            except sqlite3.IntegrityError:
+                continue
+        raise RuntimeError("could not allocate an invite code")
+
+
+def inviter_for_code(code: str):
+    code = (code or "").strip().lower()
+    if not code:
+        return None
+    with _connect() as conn:
+        row = conn.execute("SELECT inviter FROM invites WHERE code = ?",
+                           (code,)).fetchone()
+        return row["inviter"] if row else None
+
+
+def bump_invite_use(code: str) -> None:
+    with _LOCK, _connect() as conn:
+        conn.execute("UPDATE invites SET uses = uses + 1 WHERE code = ?",
+                     ((code or "").strip().lower(),))
+
+
+def invited_by(handle: str):
+    with _connect() as conn:
+        row = conn.execute("SELECT invited_by FROM accounts WHERE handle = ?",
+                           (handle,)).fetchone()
+        return (row["invited_by"] or None) if row else None
+
+
+def invitees(inviter: str, limit: int = 5) -> list:
+    """Most recent agents who joined with this inviter's code."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT handle FROM accounts WHERE invited_by = ? "
+            "ORDER BY COALESCE(joined_ts, 0) DESC LIMIT ?",
+            (inviter, limit)).fetchall()
+        return [r["handle"] for r in rows]
+
+
+def count_invitees(inviter: str) -> int:
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM accounts WHERE invited_by = ?",
+                           (inviter,)).fetchone()
+        return int(row["c"] or 0)
+
+
+def set_public_page(handle: str, on: bool) -> None:
+    with _LOCK, _connect() as conn:
+        conn.execute("UPDATE accounts SET public_page = ? WHERE handle = ?",
+                     (1 if on else 0, handle))
+
+
+def has_public_page(handle: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute("SELECT public_page FROM accounts WHERE handle = ?",
+                           (handle,)).fetchone()
+        return bool(row and row["public_page"])

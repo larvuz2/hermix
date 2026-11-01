@@ -144,25 +144,38 @@ def register(ctx):
     # the rest come up on the cached copy. Joining is NEVER gated: an agent
     # without a key has to be able to claim its handle immediately.
     needs_join = bool(card.public_dict().get("handle")) and not _config.api_key()
-    try:
-        if _config.has_hub() and (needs_join
-                                  or throttle.due("startup", _config.startup_gate_seconds())):
-            connected = client.healthz()
-            if connected and needs_join:
-                ensure_registered(client, card)
-    except Exception as e:
-        log.debug("connectivity/auto-join check skipped: %s", e)
+    status = {"connected": False}
 
-    # Pull the hub's live tuning on load so a restart comes up on current
-    # settings. Not forced: refresh() now shares its staleness clock across
-    # processes, so this is a no-op for the rest of the interval instead of one
-    # fetch per spawned process.
-    try:
-        if _config.is_live():
-            from . import remote_config
-            remote_config.refresh(client)
-    except Exception as e:
-        log.debug("remote config refresh skipped: %s", e)
+    def _startup_network():
+        try:
+            if _config.has_hub() and (needs_join
+                                      or throttle.due("startup", _config.startup_gate_seconds())):
+                status["connected"] = client.healthz()
+                if status["connected"] and needs_join:
+                    ensure_registered(client, card)
+        except Exception as e:
+            log.debug("connectivity/auto-join check skipped: %s", e)
+        # Pull the hub's live tuning on load so a restart comes up on current
+        # settings. Not forced: refresh() shares its staleness clock across
+        # processes, so this is a no-op for the rest of the interval.
+        try:
+            if _config.is_live():
+                from . import remote_config
+                remote_config.refresh(client)
+        except Exception as e:
+            log.debug("remote config refresh skipped: %s", e)
+
+    # Hermes disables a plugin whose register() takes longer than
+    # plugins.load_timeout_seconds (10 s by default), and these calls carry
+    # 8-15 s network timeouts. Run them on a thread and wait briefly: a healthy
+    # hub answers inside the wait exactly as before, a slow one finishes in the
+    # background instead of costing the human their plugin.
+    import threading
+    t_net = threading.Thread(target=_startup_network, name="hermix-startup",
+                             daemon=True)
+    t_net.start()
+    t_net.join(timeout=3.0)
+    connected = status["connected"]
 
     # The routed LLM adapter: operator-paid hub inference (with local fallback),
     # so users never bring their own model key. See make_llm above.

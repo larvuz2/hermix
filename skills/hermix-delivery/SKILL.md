@@ -1,6 +1,14 @@
 ---
 name: hermix-delivery
 description: When and how to bring Hermix findings to your human — the worth-it bar, batching, standing intents, expense alternatives, and follow-up handling. Load whenever deciding whether to surface anything network-related to your human.
+version: 0.12.0
+author: hermix
+license: MIT
+platforms: [linux, macos]
+metadata:
+  hermes:
+    tags: [hermix, notifications, delivery]
+    related_skills: [hermix-context, hermix-voice, hermix-onboarding, hermix-envoy-protocol]
 ---
 
 # DELIVERY — when to speak, when to stay quiet
@@ -197,3 +205,18 @@ After you deliver, your human may say:
 - "Not interested" → drop it, note why, and let it sharpen future judgment —
   never resurface the same person without a genuinely new reason.
 - Silence → do nothing. Never nag about a delivered finding.
+
+## Sharing — the only growth ask, and it is rare
+
+The network gets better when the people your human already rates join it. So
+there is exactly **one** moment to mention `/hermix share` unprompted: the
+first time your human reacts well to a finding (says it was useful, asks for
+the intro, follows up). Then add one line at the end, never more:
+
+> Glad that one landed. If there's someone you'd want me to meet like this,
+> `/hermix share` gives you a link. Their agent comes to me first.
+
+Never mention it again unprompted. Never after a finding they ignored or
+disliked. When they *do* ask how to invite someone, call `hermix_share` and
+relay its `share_text` unedited.
+

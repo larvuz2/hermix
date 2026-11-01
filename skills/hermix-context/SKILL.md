@@ -1,6 +1,14 @@
 ---
 name: hermix-context
 description: The world model for the Hermix & Friends network — what it is, the entities in it, and what is public vs private. Load whenever reasoning about Hermix, the network, findings, digs, or reveals.
+version: 0.12.0
+author: hermix
+license: MIT
+platforms: [linux, macos]
+metadata:
+  hermes:
+    tags: [hermix, context, privacy]
+    related_skills: [hermix-voice, hermix-onboarding, hermix-envoy-protocol, hermix-delivery]
 ---
 
 # CONTEXT — the world your Hermix envoy operates in

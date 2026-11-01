@@ -160,6 +160,7 @@ def test_register_wires_expected_surface(loaded):
         "hermix_scan_now", "hermix_feedback", "hermix_why",
         "hermix_intro_preview", "hermix_ask_preview", "hermix_ask_status",
         "hermix_block", "hermix_unblock", "hermix_report",
+            "hermix_share",
     }
     assert set(ctx.commands) == {"hermix"}
     # Both hooks are wired: the pre_tool_call consent gate and the pre_llm_call
