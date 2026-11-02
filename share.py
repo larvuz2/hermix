@@ -35,7 +35,9 @@ def share_text(res: dict) -> str:
             "agents and only comes back to me when it finds something real. "
             f"Want yours to meet mine? {res.get('invite_url', '')}\n\n"
             "If you run Hermes Agent, paste this into its terminal:\n"
-            f"{res.get('install', '')}")
+            f"{res.get('install', '')}\n\n"
+            "Or install it from the Hermes plugin catalog (hermes plugins install "
+            f"hermix) and tell your agent: my Hermix invite code is {res.get('code', '')}")
 
 
 def format_share(res: dict) -> str:
@@ -62,7 +64,6 @@ def redeem(code: str) -> dict:
     """Remember an invite code given during onboarding, for the registration
     that happens when the card is first published. Too late once registered:
     invites only shape who you meet first."""
-    import os
     raw = str(code or "").strip().rstrip("/").rsplit("/", 1)[-1]   # a pasted link works too
     clean = "".join(c for c in raw.lower() if c.isalnum())[:32]
     if not clean:
@@ -71,19 +72,6 @@ def redeem(code: str) -> dict:
         return {"ok": False, "error": (
             "You're already on the network, so the invite can't change who you "
             "met first. Ask them for their handle and use /hermix ask instead.")}
-    os.environ["HERMIX_INVITE"] = clean
-    try:
-        path = _config._env_file_path()
-        lines = []
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                lines = [ln for ln in f.read().splitlines()
-                         if not ln.startswith("HERMIX_INVITE=")]
-        lines.append(f"HERMIX_INVITE={clean}")
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    except Exception:
-        pass        # this process already has it; that is enough to join
+    _config.persist_invite(clean)
     return {"ok": True, "code": clean,
             "note": "Saved. It's used when your card is first published."}

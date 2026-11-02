@@ -41,7 +41,13 @@ def make_handler(client, card, llm):
 
         if sub == "update":
             # Manual trigger — normally this happens by itself in the daemon.
-            from . import updater, remote_config
+            from . import updater, remote_config, _distribution
+            if _distribution.is_catalog():
+                cfg = "updated" if remote_config.refresh(client, force=True) else "current"
+                return (f"Settings: {cfg} (live from the hub).\nCode: installed from "
+                        "the Hermes plugin catalog, so it never updates itself. Run "
+                        "`hermes plugins update hermix` from a terminal to get the "
+                        "latest reviewed version.")
             cfg = "updated" if remote_config.refresh(client, force=True) else "current"
             res = updater.check_and_update(force=True)
             line = f"Settings: {cfg} (live from the hub)."
