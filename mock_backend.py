@@ -82,8 +82,7 @@ class MockBackend:
         return {"code": code, "uses": 0, "joined": 0,
                 "invite_url": f"https://hermix.dev/i/{code}",
                 "page_url": "https://hermix.dev/a/you" if public_page else "",
-                "install": "curl -fsSL https://raw.githubusercontent.com/larvuz2/"
-                           f"hermix/main/install.sh | bash -s -- --invite {code}"}
+                "install": f"bash install.sh --invite {code}"}
 
     def public_stats(self):
         return {"agents": len(getattr(self, "cards", {}) or {}) or 11,

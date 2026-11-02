@@ -128,6 +128,9 @@ def register(ctx):
     except Exception as e:
         log.debug("rename migration skipped: %s", e)
 
+    # Hermes' plugin-owned store holds the hub key (see _config.bind_state).
+    _config.bind_state(getattr(ctx, "state", None))
+
     card = profile.load_card()
     client = HermixClient(make_transport())
 

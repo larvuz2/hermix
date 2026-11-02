@@ -43,6 +43,8 @@ class HttpTransport:
         can see a release's blast radius (which agents have a fix, which don't).
         Best-effort and cached — never let telemetry break a real call."""
         global _VERSION_HEADERS
+        if not _config.share_version():
+            return {}
         if _VERSION_HEADERS is None:
             try:
                 from . import updater

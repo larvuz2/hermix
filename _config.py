@@ -20,6 +20,42 @@ DEFAULT_API_URL = "https://api.hermix.dev"
 # correct even when one process serves several profiles.
 _KEY_CACHE = {}
 
+# Hermes' plugin-owned, profile-scoped store (ctx.state, a 0600 JSON file under
+# <HERMES_HOME>/plugin-data/hermix/). Bound by register(). This is where the
+# hub key lives: it is issued by our own hub, so it belongs to the plugin's own
+# data rather than to the user's secrets file. Absent on old Hermes and in the
+# sidecar process, which fall back to the environment.
+_STATE = None
+_STATE_KEY = "hub_api_key"
+_STATE_INVITE = "invite_code"
+
+
+def bind_state(state) -> None:
+    global _STATE
+    _STATE = state if (state is not None and hasattr(state, "get")
+                       and hasattr(state, "set")) else None
+
+
+def _state_get(key: str) -> str:
+    if _STATE is None:
+        return ""
+    try:
+        return str(_STATE.get(key, "") or "")
+    except Exception as e:
+        log.debug("plugin state read failed: %s", e)
+        return ""
+
+
+def _state_set(key: str, value: str) -> bool:
+    if _STATE is None:
+        return False
+    try:
+        _STATE.set(key, value)
+        return True
+    except Exception as e:
+        log.debug("plugin state write failed: %s", e)
+        return False
+
 
 def _profile_home() -> str:
     """Identifies WHICH profile we are running as.
@@ -111,6 +147,9 @@ def api_key() -> str:
     val = (_get_secret("HERMIX_API_KEY", "") or "").strip()
     if val:
         return val
+    val = _state_get(_STATE_KEY).strip()
+    if val:
+        return val
     if not _multiplex_active():
         # os.environ IS the mechanism here, so consulting the cache would only
         # let a cleared or rotated key linger for the life of the process.
@@ -124,7 +163,8 @@ def api_key() -> str:
 def invite_code() -> str:
     """An invite code to join with (install.sh --invite writes HERMIX_INVITE).
     Used once, at registration: whoever invited us is our first conversation."""
-    val = (_get_secret("HERMIX_INVITE", "") or "").strip().lower()
+    val = (_get_secret("HERMIX_INVITE", "") or _state_get(_STATE_INVITE)
+           or "").strip().lower()
     return "".join(c for c in val if c.isalnum())[:32]
 
 
@@ -142,20 +182,11 @@ def is_live() -> bool:
     return bool(service_url()) and bool(api_key())
 
 
-def _env_file_path() -> str:
-    """Where to persist the auto-obtained key. HERMIX_ENV_FILE overrides (tests);
-    else ~/.hermes/.env (HERMES_HOME honoured)."""
-    override = os.environ.get("HERMIX_ENV_FILE")
-    if override:
-        return override
-    base = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
-    return os.path.join(base, ".env")
-
-
 def persist_api_key(key: str) -> None:
-    """Save an auto-obtained key to this process's env (so the plugin is live
-    immediately) and to ~/.hermes/.env (so it survives a restart). Best-effort:
-    the in-process env alone is enough to function this session."""
+    """Keep an auto-obtained key: in memory for this session, in Hermes' plugin
+    state for the next one, and (standalone build only) in ~/.hermes/.env for
+    the optional sidecar process, which has no plugin context. Best-effort:
+    the in-memory copy alone is enough to function this session."""
     key = (key or "").strip()
     if not key:
         return
@@ -166,21 +197,39 @@ def persist_api_key(key: str) -> None:
     _KEY_CACHE[_profile_home()] = key
     if not _multiplex_active():
         os.environ["HERMIX_API_KEY"] = key
+    _state_set(_STATE_KEY, key)
+    _persist_standalone("HERMIX_API_KEY", key)
+
+
+def persist_invite(code: str) -> None:
+    """Remember an invite code until registration uses it."""
+    os.environ["HERMIX_INVITE"] = code
+    _state_set(_STATE_INVITE, code)
+    _persist_standalone("HERMIX_INVITE", code)
+
+
+def _persist_standalone(name: str, value: str) -> None:
+    """GitHub build only: mirror a value into the Hermes .env file for the
+    optional systemd sidecar, which runs outside Hermes and cannot reach
+    ctx.state. The catalog build ships without _standalone.py, so there this
+    is a no-op and credentials never touch a file Hermes doesn't own."""
     try:
-        path = _env_file_path()
-        parent = os.path.dirname(path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        lines = []
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                lines = [ln for ln in f.read().splitlines()
-                         if not ln.startswith("HERMIX_API_KEY=")]
-        lines.append(f"HERMIX_API_KEY={key}")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    except Exception:
-        pass
+        from . import _standalone
+    except ImportError:
+        return
+    _standalone.write_env_value(_standalone.env_file_path(), name, value)
+
+
+def share_version() -> bool:
+    """Whether to tell the hub which plugin version is running (two request
+    headers, no content). On by default in the standalone build, where it
+    drives staged rollouts; opt-in (HERMIX_SHARE_VERSION=1) in the catalog
+    build, whose rules make any usage reporting opt-in."""
+    from . import _distribution
+    raw = (_env("HERMIX_SHARE_VERSION", "") or "").strip().lower()
+    if raw:
+        return raw not in ("0", "false", "no", "off")
+    return not _distribution.is_catalog()
 
 
 def llm_mode() -> str:
